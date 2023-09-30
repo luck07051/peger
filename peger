@@ -1,0 +1,206 @@
+#!/bin/sh
+
+# default command
+install_cmd="${PKGMAN:-pacman} -S"
+uninstall_cmd="${PKGMAN:-pacman} -Rns"
+get_local_packages_cmd="${PKGMAN:-pacman} -Qq"
+terminal_cmd="${TERMINAL:-st} -t installer"
+
+the_file="${XDG_DATA_HOME:-$HOME/.local/share}/peger/packages"
+# cache file
+cache_packages="${XDG_CACHE_HOME:-$HOME/.cache}/peger_cache"
+# temp file
+temp_file="/tmp/peger_temp"
+install_list="/tmp/peger_install-list"
+uninstall_list="/tmp/peger_uninstall-list"
+local_packages="/tmp/peger_local-packages"
+execute_file="/tmp/peger_execute_file"
+
+# default options
+no_gui=false
+
+usage(){
+	cat <<EOF
+Usage: ${0##*/} [OPTION]... [FILE]
+Manage packages with text file.
+
+  -h, --help            show this help
+  -n, --new-cache       remove old cache file
+  -g, --no-gui          don't uses extra gui terminal to install packages
+
+Add or remove packages in FILE to install or uninstall packages.
+Specify the install, uninstall command by adding line start with '##'.
+
+Example file:
+
+##install_cmd="pacman -S"
+##uninstall_cmd="pacman -Rns"
+##get_local_packages_cmd="pacman -Qq"
+##terminal_cmd="st -t installer -c float"
+# line start with '#' will be ignore.
+package1
+package2 package3
+
+EOF
+	exit
+}
+
+clear() {
+	rm -f $temp_file $install_list $uninstall_list $local_packages $execute_file
+	exit
+}
+trap clear EXIT INT TERM
+
+redir(){
+	temp=$(mktemp)
+	cat > "$temp"
+	mv -f "$temp" "$1"
+}
+
+parse_cmd(){
+	eval "$(sed -n 's/\s*##\s*\(.*\)$/\1/p' "$the_file")"
+}
+
+update_cache(){
+	comm "$cache_packages" "$local_packages" -12 | redir "$cache_packages"
+}
+
+parse_packages(){
+	temp_packages_list="$(sed 's/\s*#.*$//' "$the_file" | tr ' ' '\n' |
+		sed '/^\s*$/d' | sort | uniq)"
+
+	printf "%s" "$temp_packages_list" | comm - "$cache_packages" -23 > "$install_list"
+	printf "%s" "$temp_packages_list" | comm - "$cache_packages" -13 > "$uninstall_list"
+
+	[ -s "$install_list" ] && check_install_packages
+	[ -s "$uninstall_list" ] && check_uninstall_packages
+}
+
+# Check packages that exist in system, to remove it at install list and add to cache
+check_install_packages(){
+	comm "$install_list" "$local_packages" -12 > "$temp_file"
+
+	if [ ! -s "$temp_file" ]; then
+		return
+	fi
+
+	# update cache
+	cat "$cache_packages" "$temp_file" | sort | uniq | redir "$cache_packages"
+	# update install list
+	comm "$install_list" "$temp_file" -23 | redir "$install_list"
+}
+
+# Check packages that no exist in system, to remove it at uninstall list and remove from cache
+check_uninstall_packages(){
+	comm "$uninstall_list" "$local_packages" -23 > "$temp_file"
+
+	if [ ! -s "$temp_file" ]; then
+		return
+	fi
+
+	# update cache
+	comm "$cache_packages" "$temp_file" -12 | redir "$cache_packages"
+	# update uninstall list
+	comm "$uninstall_list" "$temp_file" -13 | redir "$uninstall_list"
+}
+
+generate_install_command() {
+	cat > "$execute_file" << EOB
+#!/bin/sh
+read_char() {
+	stty -icanon -echo
+	eval "\$1=\$(dd bs=1 count=1 2>/dev/null)"
+	stty icanon echo
+}
+
+install_packages="$(tr '\n' ' ' < "$install_list")"
+uninstall_packages="$(tr '\n' ' ' < "$uninstall_list")"
+
+echo 'The following commands will be execute:'
+[ -s "$install_list" ] && echo "  $install_cmd \$install_packages"
+[ -s "$uninstall_list" ] && echo "  $uninstall_cmd \$uninstall_packages"
+
+printf 'Press <Enter> or y to continue.'
+read_char ans
+
+case \$ans in
+	"$(printf '\n')" | 'y') printf '\n\n' ;;
+	*) exit
+esac
+
+# exec the cmd
+[ -s "$install_list" ] && $install_cmd \$install_packages
+[ -s "$uninstall_list" ] && $uninstall_cmd \$uninstall_packages
+
+# update local_packages
+$get_local_packages_cmd | sort > "$local_packages"
+printf '\n\n'
+
+# show the packages that not install or uninstall successfully
+comm "$install_list" "$local_packages" -23 | tr '\n' ' ' |
+	xargs -r -I {} echo 'These package not been installed: {}'
+	comm "$uninstall_list" "$local_packages" -12 | tr '\n' ' ' |
+		xargs -r -I {} echo 'These package not been uninstalled: {}'
+
+# freezing gui terminal
+[ "\$1" = 'gui' ] && echo 'Press any key to finish' && read_char _
+EOB
+	chmod +x "$execute_file"
+}
+
+update_cache_after_install(){
+	comm $install_list $local_packages -12 | cat - "$cache_packages" |
+		sort | uniq | redir "$cache_packages"
+	comm $uninstall_list $local_packages -23 | comm - "$cache_packages" -13 |
+		redir "$cache_packages"
+}
+
+# parse options
+TEMP=$(getopt -o 'hng' -l 'help,new-cache,no-gui' -n "$0" -- "$@")
+[ $? -ne 0 ] && exit 1
+eval set -- "$TEMP"
+unset TEMP
+while true; do
+	case "$1" in
+		'-h'|'--help')        usage ;;
+		'-n'|'--new-cache')   rm -f "$cache_packages"; shift ;;
+		'-g'|'--no-gui')      no_gui='true';           shift ;;
+		'--')   [ $# -gt 2 ] && echo 'Too many args!' >&2 && exit 1
+			[ -n "$2" ] && the_file="$2"
+			break ;;
+		*) echo 'Internal error!' >&2; exit 1 ;;
+	esac
+done
+
+# check the file
+if [ ! -f "$the_file" ]; then
+	echo 'Packages list not found.' >&2
+	exit 1
+fi
+
+if [ ! -f "$cache_packages" ]; then
+	mkdir -p "$(dirname "$cache_packages")"
+	touch "$cache_packages"
+fi
+
+
+parse_cmd
+
+$get_local_packages_cmd | sort > "$local_packages"
+update_cache
+
+parse_packages
+
+if [ ! -s $install_list ] && [ ! -s $uninstall_list ]; then
+	exit
+fi
+
+generate_install_command
+
+if [ -z "$DISPLAY" ] || [ "$no_gui" = 'true' ]; then
+	$execute_file
+else
+	$terminal_cmd $execute_file 'gui'
+fi
+
+update_cache_after_install
