@@ -113,8 +113,8 @@ read_char() {
 	stty icanon echo
 }
 
-install_packages="$(tr '\n' ' ' < "$install_list")"
-uninstall_packages="$(tr '\n' ' ' < "$uninstall_list")"
+install_packages="\$(tr '\n' ' ' < "$install_list")"
+uninstall_packages="\$(tr '\n' ' ' < "$uninstall_list")"
 
 printf 'The following commands will be execute:\n'
 [ -s "$install_list" ] && printf '  $install_cmd %s\n'  "\$install_packages"
