@@ -116,9 +116,9 @@ read_char() {
 install_packages="$(tr '\n' ' ' < "$install_list")"
 uninstall_packages="$(tr '\n' ' ' < "$uninstall_list")"
 
-echo 'The following commands will be execute:'
-[ -s "$install_list" ] && echo "  $install_cmd \$install_packages"
-[ -s "$uninstall_list" ] && echo "  $uninstall_cmd \$uninstall_packages"
+printf 'The following commands will be execute:\n'
+[ -s "$install_list" ] && printf '  $install_cmd %s\n'  "\$install_packages"
+[ -s "$uninstall_list" ] && printf '  $uninstall_cmd %s\n' "\$uninstall_packages"
 
 printf 'Press <Enter> or y to continue.'
 read_char ans
@@ -138,12 +138,12 @@ printf '\n\n'
 
 # show the packages that not install or uninstall successfully
 comm "$install_list" "$local_packages" -23 | tr '\n' ' ' |
-	xargs -r -I {} echo 'These package not been installed: {}'
-	comm "$uninstall_list" "$local_packages" -12 | tr '\n' ' ' |
-		xargs -r -I {} echo 'These package not been uninstalled: {}'
+	xargs -r -I {} printf 'These package not been installed: {}\n'
+comm "$uninstall_list" "$local_packages" -12 | tr '\n' ' ' |
+	xargs -r -I {} printf 'These package not been uninstalled: {}\n'
 
 # freezing gui terminal
-[ "\$1" = 'gui' ] && echo 'Press any key to finish' && read_char _
+[ "\$1" = 'gui' ] && printf 'Press any key to finish' && read_char _
 EOB
 	chmod +x "$execute_file"
 }
@@ -165,16 +165,16 @@ while true; do
 		'-h'|'--help')        usage ;;
 		'-n'|'--new-cache')   rm -f "$cache_packages"; shift ;;
 		'-g'|'--no-gui')      no_gui='true';           shift ;;
-		'--')   [ $# -gt 2 ] && echo 'Too many args!' >&2 && exit 1
+		'--')   [ $# -gt 2 ] && printf 'Too many args!\n' >&2 && exit 1
 			[ -n "$2" ] && the_file="$2"
 			break ;;
-		*) echo 'Internal error!' >&2; exit 1 ;;
+		*) printf 'Internal error!\n' >&2; exit 1 ;;
 	esac
 done
 
 # check the file
 if [ ! -f "$the_file" ]; then
-	echo 'Packages list not found.' >&2
+	printf 'Packages list not found.\n' >&2
 	exit 1
 fi
 
